@@ -26,12 +26,6 @@ export default function MemberDashboard() {
       return
     }
 
-    // Redirect exec members to exec dashboard
-    if (currentUser.isExec) {
-      navigate('/exec', { replace: true })
-      return
-    }
-
     loadMemberData(currentUser.computingId)
   }, [navigate])
 
@@ -87,17 +81,30 @@ export default function MemberDashboard() {
     )
   }
 
+  const currentUser = getCurrentUser()
+  const isExecViewingAsMember = currentUser?.isExec
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <h1 className="text-2xl font-bold text-[#0E396D]">RAM Points Tracker</h1>
-          <button
-            onClick={handleLogout}
-            className="px-4 py-2 border-2 border-gray-200 text-gray-700 rounded-lg font-medium hover:border-[#0E396D] hover:text-[#0E396D] transition-colors"
-          >
-            Log Out
-          </button>
+          <div className="flex gap-3 items-center">
+            {isExecViewingAsMember && (
+              <button
+                onClick={() => navigate('/exec')}
+                className="px-4 py-2 border-2 border-[#0E396D] text-[#0E396D] rounded-lg font-medium hover:bg-[#0E396D] hover:text-white transition-colors"
+              >
+                Back to Exec Dashboard
+              </button>
+            )}
+            <button
+              onClick={handleLogout}
+              className="px-4 py-2 border-2 border-gray-200 text-gray-700 rounded-lg font-medium hover:border-[#0E396D] hover:text-[#0E396D] transition-colors"
+            >
+              Log Out
+            </button>
+          </div>
         </div>
       </header>
 
