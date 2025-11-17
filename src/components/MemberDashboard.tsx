@@ -53,7 +53,7 @@ export default function MemberDashboard({ user }: Props) {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <div className="w-10 h-10 border-4 border-gray-200 border-t-blue-600 rounded-full animate-spin"></div>
+        <div className="w-10 h-10 border-4 border-gray-200 border-t-[#0E396D] rounded-full animate-spin"></div>
       </div>
     )
   }
@@ -70,10 +70,10 @@ export default function MemberDashboard({ user }: Props) {
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-gray-900">RAM Points Tracker</h1>
+          <h1 className="text-2xl font-bold text-[#0E396D]">RAM Points Tracker</h1>
           <button
             onClick={handleLogout}
-            className="px-4 py-2 border-2 border-gray-200 text-gray-700 rounded-lg font-medium hover:border-indigo-500 hover:text-indigo-600 transition-colors"
+            className="px-4 py-2 border-2 border-gray-200 text-gray-700 rounded-lg font-medium hover:border-[#0E396D] hover:text-[#0E396D] transition-colors"
           >
             Log Out
           </button>
@@ -82,12 +82,12 @@ export default function MemberDashboard({ user }: Props) {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="mb-8">
-          <h2 className="text-3xl font-bold text-gray-900 mb-2">Welcome, {member.name}!</h2>
+          <h2 className="text-3xl font-bold text-[#0E396D] mb-2">Welcome, {member.name}!</h2>
           <p className="text-gray-600">@{member.computingId}</p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-500 rounded-xl p-8 text-white shadow-lg hover:shadow-xl transition-shadow">
+          <div className="bg-[#0E396D] rounded-xl p-8 text-white shadow-lg hover:shadow-xl transition-shadow border-2 border-[#F0D64E]">
             <div className="text-sm font-medium uppercase tracking-wider mb-2 opacity-90">
               Total Points
             </div>

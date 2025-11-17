@@ -14,9 +14,13 @@ export default function ExecDashboard({ user }: Props) {
   const [events, setEvents] = useState<Event[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
-  const [activeTab, setActiveTab] = useState<'members' | 'events' | 'upload'>('members')
+  const [activeTab, setActiveTab] = useState<'members' | 'events'>('members')
   const [editingMember, setEditingMember] = useState<Member | null>(null)
-  const [newEvent, setNewEvent] = useState({ name: '', date: '', points: 1 })
+  const [newEvent, setNewEvent] = useState({ name: '', date: '', points: 2 })
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const [isUploading, setIsUploading] = useState(false)
+  const [deletingMemberId, setDeletingMemberId] = useState<string | null>(null)
+  const [deletingEventId, setDeletingEventId] = useState<string | null>(null)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -93,30 +97,58 @@ export default function ExecDashboard({ user }: Props) {
   const handleCreateEvent = async (e: React.FormEvent) => {
     e.preventDefault()
 
+    if (uploadFile) {
+      setIsUploading(true)
+    }
+
     try {
-      const { error } = await supabase.from('events').insert([newEvent])
+      // Create the event first
+      const { data: createdEvent, error: eventError } = await supabase
+        .from('events')
+        .insert([newEvent])
+        .select()
+        .single()
 
-      if (error) throw error
+      if (eventError) throw eventError
 
-      setNewEvent({ name: '', date: '', points: 1 })
+      // If a file was uploaded, process it and assign points
+      if (uploadFile && createdEvent) {
+        await processSpreadsheetForEvent(uploadFile, createdEvent.id!, newEvent.points, newEvent.date)
+      }
+
+      setNewEvent({ name: '', date: '', points: 2 })
+      setUploadFile(null)
       await loadData()
       setActiveTab('events')
+      alert(uploadFile ? 'Event created and spreadsheet processed successfully!' : 'Event created successfully!')
     } catch (err) {
       console.error('Error creating event:', err)
       alert('Failed to create event. Please try again.')
+    } finally {
+      setIsUploading(false)
     }
   }
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
+  const processSpreadsheetForEvent = async (file: File, eventId: string, eventPoints: number, eventDate: string) => {
     try {
+      let workbook: XLSX.WorkBook
+      const fileName = file.name.toLowerCase()
+      
+      if (fileName.endsWith('.csv')) {
+        // Handle CSV files as text
+        const text = await file.text()
+        workbook = XLSX.read(text, { type: 'string' })
+      } else {
+        // Handle Excel files (.xlsx, .xls) as binary
       const data = await file.arrayBuffer()
-      const workbook = XLSX.read(data)
+        workbook = XLSX.read(data)
+      }
+      
       const sheetName = workbook.SheetNames[0]
       const worksheet = workbook.Sheets[sheetName]
       const jsonData = XLSX.utils.sheet_to_json(worksheet) as any[]
+
+      const isSpring2025 = new Date(eventDate) >= new Date('2025-01-01') && new Date(eventDate) < new Date('2025-06-01')
 
       // Process each row
       for (const row of jsonData) {
@@ -132,9 +164,14 @@ export default function ExecDashboard({ user }: Props) {
           .eq('computingId', computingId)
           .maybeSingle()
 
+        let memberId: string
+        let member: Member | null = null
+
         if (!existingMember) {
           // Create new member
-          const { error: insertError } = await supabase.from('members').insert([
+          const { data: newMember, error: insertError } = await supabase
+            .from('members')
+            .insert([
             {
               name,
               computingId,
@@ -145,19 +182,181 @@ export default function ExecDashboard({ user }: Props) {
               fall2025Total: 0,
             },
           ])
+            .select()
+            .single()
 
           if (insertError) {
             console.error(`Error creating member ${name}:`, insertError)
+            continue
+          }
+
+          memberId = newMember.id!
+          member = newMember
+        } else {
+          memberId = existingMember.id!
+          member = existingMember
+        }
+
+        // Check if attendance already exists
+        const { data: existingAttendance } = await supabase
+          .from('event_attendance')
+          .select('*')
+          .eq('eventId', eventId)
+          .eq('memberId', memberId)
+          .maybeSingle()
+
+        if (!existingAttendance) {
+          // Add attendance for this event
+          const { error: attendanceError } = await supabase.from('event_attendance').insert([
+            { eventId, memberId, points: eventPoints },
+          ])
+
+          if (attendanceError) {
+            console.error(`Error adding attendance for ${name}:`, attendanceError)
+            continue
+          }
+        } else {
+          // Attendance already exists, skip to avoid duplicate points
+          continue
+        }
+
+        // Update member points
+        if (member) {
+          const updates: any = {}
+          if (isSpring2025) {
+            updates.spring2025Total = (member.spring2025Total || 0) + eventPoints
+          } else {
+            updates.fall2025Total = (member.fall2025Total || 0) + eventPoints
+          }
+          updates.totalPoints = (member.totalPoints || 0) + eventPoints
+
+          const { error: updateError } = await supabase.from('members').update(updates).eq('id', memberId)
+          if (updateError) {
+            console.error(`Error updating points for ${name}:`, updateError)
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error processing spreadsheet:', err)
+      throw err
+    }
+  }
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      setUploadFile(file)
+    }
+  }
+
+  const handleDeleteMember = async (member: Member) => {
+    if (!confirm(`Are you sure you want to delete ${member.name}? This action cannot be undone.`)) {
+      return
+    }
+
+    setDeletingMemberId(member.id!)
+
+    try {
+      // Delete event attendance records first
+      const { error: attendanceError } = await supabase
+        .from('event_attendance')
+        .delete()
+        .eq('memberId', member.id!)
+
+      if (attendanceError) {
+        console.error('Error deleting attendance records:', attendanceError)
+      }
+
+      // Delete the member
+      const { error: deleteError } = await supabase
+        .from('members')
+        .delete()
+        .eq('id', member.id!)
+
+      if (deleteError) throw deleteError
+
+      await loadData()
+      alert('Member deleted successfully!')
+    } catch (err) {
+      console.error('Error deleting member:', err)
+      alert('Failed to delete member. Please try again.')
+    } finally {
+      setDeletingMemberId(null)
+    }
+  }
+
+  const handleDeleteEvent = async (event: Event) => {
+    if (!confirm(`Are you sure you want to delete "${event.name}"? This will remove all points associated with this event from members. This action cannot be undone.`)) {
+      return
+    }
+
+    setDeletingEventId(event.id!)
+
+    try {
+      // Get all attendance records for this event
+      const { data: attendanceRecords, error: fetchError } = await supabase
+        .from('event_attendance')
+        .select('*')
+        .eq('eventId', event.id!)
+
+      if (fetchError) throw fetchError
+
+      // Update member points by subtracting the points they received from this event
+      if (attendanceRecords && attendanceRecords.length > 0) {
+        const isSpring2025 = new Date(event.date) >= new Date('2025-01-01') && new Date(event.date) < new Date('2025-06-01')
+
+        for (const attendance of attendanceRecords) {
+          // Get the member to get current totals
+          const { data: member } = await supabase
+            .from('members')
+            .select('*')
+            .eq('id', attendance.memberId)
+            .single()
+
+          if (member) {
+            const updates: any = {}
+            if (isSpring2025) {
+              updates.spring2025Total = Math.max(0, (member.spring2025Total || 0) - attendance.points)
+            } else {
+              updates.fall2025Total = Math.max(0, (member.fall2025Total || 0) - attendance.points)
+            }
+            updates.totalPoints = Math.max(0, (member.totalPoints || 0) - attendance.points)
+
+            const { error: updateError } = await supabase
+              .from('members')
+              .update(updates)
+              .eq('id', attendance.memberId)
+
+            if (updateError) {
+              console.error(`Error updating points for member ${attendance.memberId}:`, updateError)
+            }
           }
         }
       }
 
+      // Delete all attendance records for this event
+      const { error: attendanceDeleteError } = await supabase
+        .from('event_attendance')
+        .delete()
+        .eq('eventId', event.id!)
+
+      if (attendanceDeleteError) throw attendanceDeleteError
+
+      // Delete the event
+      const { error: eventDeleteError } = await supabase
+        .from('events')
+        .delete()
+        .eq('id', event.id!)
+
+      if (eventDeleteError) throw eventDeleteError
+
       await loadData()
-      alert('Spreadsheet processed successfully!')
-      e.target.value = ''
+      alert('Event deleted successfully! All associated points have been removed from members.')
     } catch (err) {
-      console.error('Error processing spreadsheet:', err)
-      alert('Failed to process spreadsheet. Please check the format.')
+      console.error('Error deleting event:', err)
+      alert('Failed to delete event. Please try again.')
+    } finally {
+      setDeletingEventId(null)
     }
   }
 
@@ -225,7 +424,7 @@ export default function ExecDashboard({ user }: Props) {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
-        <div className="w-10 h-10 border-4 border-gray-200 border-t-blue-600 rounded-full animate-spin"></div>
+        <div className="w-10 h-10 border-4 border-gray-200 border-t-[#0E396D] rounded-full animate-spin"></div>
       </div>
     )
   }
@@ -234,10 +433,10 @@ export default function ExecDashboard({ user }: Props) {
     <div className="min-h-screen bg-gray-50">
       <header className="bg-white border-b border-gray-200 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-gray-900">RAM Exec Dashboard</h1>
+          <h1 className="text-2xl font-bold text-[#0E396D]">RAM Exec Dashboard</h1>
           <button
             onClick={handleLogout}
-            className="px-4 py-2 border-2 border-gray-200 text-gray-700 rounded-lg font-medium hover:border-indigo-500 hover:text-indigo-600 transition-colors"
+            className="px-4 py-2 border-2 border-gray-200 text-gray-700 rounded-lg font-medium hover:border-[#0E396D] hover:text-[#0E396D] transition-colors"
           >
             Log Out
           </button>
@@ -249,7 +448,7 @@ export default function ExecDashboard({ user }: Props) {
           <button
             className={`px-6 py-3 font-medium transition-colors border-b-2 -mb-0.5 ${
               activeTab === 'members'
-                ? 'text-indigo-600 border-indigo-600'
+                ? 'text-[#0E396D] border-[#0E396D]'
                 : 'text-gray-500 border-transparent hover:text-gray-700'
             }`}
             onClick={() => setActiveTab('members')}
@@ -259,22 +458,12 @@ export default function ExecDashboard({ user }: Props) {
           <button
             className={`px-6 py-3 font-medium transition-colors border-b-2 -mb-0.5 ${
               activeTab === 'events'
-                ? 'text-indigo-600 border-indigo-600'
+                ? 'text-[#0E396D] border-[#0E396D]'
                 : 'text-gray-500 border-transparent hover:text-gray-700'
             }`}
             onClick={() => setActiveTab('events')}
           >
             Events
-          </button>
-          <button
-            className={`px-6 py-3 font-medium transition-colors border-b-2 -mb-0.5 ${
-              activeTab === 'upload'
-                ? 'text-indigo-600 border-indigo-600'
-                : 'text-gray-500 border-transparent hover:text-gray-700'
-            }`}
-            onClick={() => setActiveTab('upload')}
-          >
-            Upload Spreadsheet
           </button>
         </div>
 
@@ -286,7 +475,7 @@ export default function ExecDashboard({ user }: Props) {
                 placeholder="Search by name, computing ID, or email..."
                 value={searchQuery}
                 onChange={(e) => handleSearch(e.target.value)}
-                className="w-full max-w-md px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500 transition-colors"
+                className="w-full max-w-md px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
               />
             </div>
 
@@ -340,12 +529,29 @@ export default function ExecDashboard({ user }: Props) {
                           {member.fall2025Total}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
+                          <div className="flex gap-2">
                           <button
                             onClick={() => handleEditMember(member)}
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                            disabled={deletingMemberId === member.id}
+                              className="bg-[#0E396D] hover:bg-[#0A2D55] text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             Edit
                           </button>
+                            <button
+                              onClick={() => handleDeleteMember(member)}
+                              disabled={deletingMemberId === member.id}
+                              className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                            >
+                              {deletingMemberId === member.id ? (
+                                <>
+                                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                  Deleting...
+                                </>
+                              ) : (
+                                'Delete'
+                              )}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -380,7 +586,7 @@ export default function ExecDashboard({ user }: Props) {
                             totalPoints: parseInt(e.target.value) || 0,
                           })
                         }
-                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500 transition-colors"
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
                       />
                     </div>
                     <div className="space-y-2">
@@ -396,7 +602,7 @@ export default function ExecDashboard({ user }: Props) {
                             spring2025Total: parseInt(e.target.value) || 0,
                           })
                         }
-                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500 transition-colors"
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
                       />
                     </div>
                     <div className="space-y-2">
@@ -412,19 +618,19 @@ export default function ExecDashboard({ user }: Props) {
                             fall2025Total: parseInt(e.target.value) || 0,
                           })
                         }
-                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500 transition-colors"
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
                       />
                     </div>
                     <div className="flex gap-3 pt-4">
                       <button
                         onClick={handleSaveMember}
-                        className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-4 rounded-lg transition-colors"
+                        className="flex-1 bg-[#0E396D] hover:bg-[#0A2D55] text-white font-semibold py-3 px-4 rounded-lg transition-colors"
                       >
                         Save
                       </button>
                       <button
                         onClick={() => setEditingMember(null)}
-                        className="flex-1 bg-transparent border-2 border-gray-200 text-gray-700 font-semibold py-3 px-4 rounded-lg hover:border-indigo-500 hover:text-indigo-600 transition-colors"
+                        className="flex-1 bg-transparent border-2 border-gray-200 text-gray-700 font-semibold py-3 px-4 rounded-lg hover:border-[#0E396D] hover:text-[#0E396D] transition-colors"
                       >
                         Cancel
                       </button>
@@ -449,7 +655,7 @@ export default function ExecDashboard({ user }: Props) {
                       value={newEvent.name}
                       onChange={(e) => setNewEvent({ ...newEvent, name: e.target.value })}
                       required
-                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500 transition-colors"
+                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
                     />
                   </div>
                   <div className="space-y-2">
@@ -459,7 +665,7 @@ export default function ExecDashboard({ user }: Props) {
                       value={newEvent.date}
                       onChange={(e) => setNewEvent({ ...newEvent, date: e.target.value })}
                       required
-                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500 transition-colors"
+                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
                     />
                   </div>
                   <div className="space-y-2">
@@ -470,20 +676,50 @@ export default function ExecDashboard({ user }: Props) {
                       onChange={(e) =>
                         setNewEvent({
                           ...newEvent,
-                          points: parseInt(e.target.value) || 1,
+                          points: parseInt(e.target.value) || 2,
                         })
                       }
                       min="1"
                       required
-                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500 transition-colors"
+                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
                     />
                   </div>
                 </div>
+                <div className="mt-6 space-y-2">
+                  <label className="block text-sm font-medium text-gray-700">
+                    Upload Spreadsheet (Optional)
+                  </label>
+                  <p className="text-sm text-gray-500 mb-2">
+                    Upload a spreadsheet with <strong>Name</strong> and <strong>Computing ID</strong> columns.
+                    Members will be created automatically and assigned points for this event.
+                  </p>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    onChange={handleFileSelect}
+                    className="w-full px-4 py-3 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-[#0E396D] transition-colors"
+                  />
+                  {uploadFile && (
+                    <p className="text-sm text-[#0E396D] mt-2">
+                      Selected: {uploadFile.name}
+                    </p>
+                  )}
+                </div>
                 <button
                   type="submit"
-                  className="mt-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
+                  disabled={isUploading}
+                  className="mt-4 bg-[#0E396D] hover:bg-[#0A2D55] text-white font-semibold py-3 px-6 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                 >
-                  Create Event
+                  {isUploading ? (
+                    <>
+                      <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      Processing Spreadsheet...
+                    </>
+                  ) : uploadFile ? (
+                    'Create Event & Process Spreadsheet'
+                  ) : (
+                    'Create Event'
+                  )}
                 </button>
               </form>
             </div>
@@ -496,16 +732,16 @@ export default function ExecDashboard({ user }: Props) {
                     key={event.id}
                     className="bg-white rounded-xl shadow-md p-6 border border-gray-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-4"
                   >
-                    <div>
+                    <div className="flex-1">
                       <h3 className="text-xl font-semibold text-gray-900 mb-1">
                         {event.name}
                       </h3>
                       <p className="text-gray-600 text-sm mb-1">
                         {new Date(event.date).toLocaleDateString()}
                       </p>
-                      <p className="text-indigo-600 font-semibold">{event.points} points</p>
+                      <p className="text-[#0E396D] font-semibold">{event.points} points</p>
                     </div>
-                    <div className="w-full md:w-auto">
+                    <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto">
                       <select
                         onChange={(e) => {
                           if (e.target.value) {
@@ -514,7 +750,7 @@ export default function ExecDashboard({ user }: Props) {
                             e.target.value = ''
                           }
                         }}
-                        className="w-full md:w-64 px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-indigo-500 transition-colors cursor-pointer"
+                        className="w-full md:w-64 px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors cursor-pointer"
                       >
                         <option value="">Add attendance...</option>
                         {members.map((member) => (
@@ -523,6 +759,20 @@ export default function ExecDashboard({ user }: Props) {
                           </option>
                         ))}
                       </select>
+                      <button
+                        onClick={() => handleDeleteEvent(event)}
+                        disabled={deletingEventId === event.id}
+                        className="bg-red-600 hover:bg-red-700 text-white px-4 py-3 rounded-lg font-medium transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                      >
+                        {deletingEventId === event.id ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                            Deleting...
+                          </>
+                        ) : (
+                          'Delete Event'
+                        )}
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -531,26 +781,6 @@ export default function ExecDashboard({ user }: Props) {
           </div>
         )}
 
-        {activeTab === 'upload' && (
-          <div className="flex justify-center">
-            <div className="bg-white rounded-xl shadow-md p-12 max-w-2xl w-full text-center border border-gray-100">
-              <h2 className="text-2xl font-bold text-gray-900 mb-4">Upload Spreadsheet</h2>
-              <p className="text-gray-600 mb-2">
-                Upload a spreadsheet with columns: <strong>Name</strong> and{' '}
-                <strong>Computing ID</strong>
-              </p>
-              <p className="text-gray-500 text-sm mb-8 italic">
-                New members will be created automatically if their computing ID doesn't exist.
-              </p>
-              <input
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                onChange={handleFileUpload}
-                className="w-full px-4 py-6 border-2 border-dashed border-gray-300 rounded-lg cursor-pointer hover:border-indigo-500 transition-colors"
-              />
-            </div>
-          </div>
-        )}
       </div>
     </div>
   )
