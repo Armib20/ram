@@ -17,6 +17,13 @@ export default function ExecDashboard() {
   const [isUploading, setIsUploading] = useState(false)
   const [deletingMemberId, setDeletingMemberId] = useState<string | null>(null)
   const [deletingEventId, setDeletingEventId] = useState<string | null>(null)
+  const [showAddMember, setShowAddMember] = useState(false)
+  const [newMember, setNewMember] = useState({
+    name: '',
+    computingId: '',
+    email: '',
+    password: '',
+  })
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -356,6 +363,57 @@ export default function ExecDashboard() {
     }
   }
 
+  const handleAddMember = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!newMember.name.trim() || !newMember.computingId.trim() || !newMember.email.trim()) {
+      alert('Please fill in all required fields')
+      return
+    }
+
+    if (newMember.password && newMember.password.length < 8) {
+      alert('Password must be at least 8 characters long')
+      return
+    }
+
+    try {
+      // Check if computing ID already exists
+      const { data: existing } = await supabase
+        .from('members')
+        .select('computingId')
+        .eq('computingId', newMember.computingId.toLowerCase())
+        .maybeSingle()
+
+      if (existing) {
+        alert('A member with this computing ID already exists')
+        return
+      }
+
+      const { error } = await supabase.from('members').insert([
+        {
+          name: newMember.name.trim(),
+          computingId: newMember.computingId.toLowerCase(),
+          email: newMember.email.toLowerCase(),
+          password: newMember.password || null,
+          isExec: false,
+          totalPoints: 0,
+          spring2025Total: 0,
+          fall2025Total: 0,
+        },
+      ])
+
+      if (error) throw error
+
+      setNewMember({ name: '', computingId: '', email: '', password: '' })
+      setShowAddMember(false)
+      await loadData()
+      alert('Member added successfully!')
+    } catch (err) {
+      console.error('Error adding member:', err)
+      alert('Failed to add member. Please try again.')
+    }
+  }
+
   const handleAddAttendance = async (eventId: string, memberId: string, points: number) => {
     try {
       // Check if attendance already exists
@@ -465,14 +523,20 @@ export default function ExecDashboard() {
 
         {activeTab === 'members' && (
           <div className="space-y-6">
-            <div className="mb-6">
+            <div className="mb-6 flex gap-4 items-center">
               <input
                 type="text"
                 placeholder="Search by name, computing ID, or email..."
                 value={searchQuery}
                 onChange={(e) => handleSearch(e.target.value)}
-                className="w-full max-w-md px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
+                className="flex-1 max-w-md px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
               />
+              <button
+                onClick={() => setShowAddMember(true)}
+                className="bg-[#0E396D] hover:bg-[#0A2D55] text-white font-semibold py-3 px-6 rounded-lg transition-colors flex items-center gap-2"
+              >
+                <span>+</span> Add Member
+              </button>
             </div>
 
             <div className="bg-white rounded-xl shadow-md overflow-hidden border border-gray-100">
@@ -555,6 +619,96 @@ export default function ExecDashboard() {
                 </table>
               </div>
             </div>
+
+            {showAddMember && (
+              <div
+                className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+                onClick={() => {
+                  setShowAddMember(false)
+                  setNewMember({ name: '', computingId: '', email: '', password: '' })
+                }}
+              >
+                <div
+                  className="bg-white rounded-2xl shadow-2xl p-8 max-w-md w-full max-h-[90vh] overflow-y-auto"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <h2 className="text-2xl font-bold text-gray-900 mb-6">Add New Member</h2>
+                  <form onSubmit={handleAddMember} className="space-y-6">
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Full Name *
+                      </label>
+                      <input
+                        type="text"
+                        value={newMember.name}
+                        onChange={(e) => setNewMember({ ...newMember, name: e.target.value })}
+                        required
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
+                        placeholder="Enter full name"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Computing ID *
+                      </label>
+                      <input
+                        type="text"
+                        value={newMember.computingId}
+                        onChange={(e) => setNewMember({ ...newMember, computingId: e.target.value.toLowerCase() })}
+                        required
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
+                        placeholder="Enter computing ID"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Email *
+                      </label>
+                      <input
+                        type="email"
+                        value={newMember.email}
+                        onChange={(e) => setNewMember({ ...newMember, email: e.target.value.toLowerCase() })}
+                        required
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
+                        placeholder="Enter email"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="block text-sm font-medium text-gray-700">
+                        Password (Optional)
+                      </label>
+                      <input
+                        type="password"
+                        value={newMember.password}
+                        onChange={(e) => setNewMember({ ...newMember, password: e.target.value })}
+                        minLength={8}
+                        className="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:outline-none focus:border-[#0E396D] transition-colors"
+                        placeholder="Leave empty to use default password"
+                      />
+                      <p className="text-xs text-gray-500">If left empty, default password will be used</p>
+                    </div>
+                    <div className="flex gap-3 pt-4">
+                      <button
+                        type="submit"
+                        className="flex-1 bg-[#0E396D] hover:bg-[#0A2D55] text-white font-semibold py-3 px-4 rounded-lg transition-colors"
+                      >
+                        Add Member
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowAddMember(false)
+                          setNewMember({ name: '', computingId: '', email: '', password: '' })
+                        }}
+                        className="flex-1 bg-transparent border-2 border-gray-200 text-gray-700 font-semibold py-3 px-4 rounded-lg hover:border-[#0E396D] hover:text-[#0E396D] transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
 
             {editingMember && (
               <div
