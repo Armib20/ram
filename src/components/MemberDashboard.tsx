@@ -4,11 +4,7 @@ import { getCurrentUser, logout } from '../lib/auth'
 import { supabase } from '../lib/supabase'
 import { Member } from '../types'
 
-interface Props {
-  user: any
-}
-
-export default function MemberDashboard({ user }: Props) {
+export default function MemberDashboard() {
   const [member, setMember] = useState<Member | null>(null)
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()

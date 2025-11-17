@@ -5,11 +5,7 @@ import { supabase } from '../lib/supabase'
 import { Member, Event } from '../types'
 import * as XLSX from 'xlsx'
 
-interface Props {
-  user: any
-}
-
-export default function ExecDashboard({ user }: Props) {
+export default function ExecDashboard() {
   const [members, setMembers] = useState<Member[]>([])
   const [events, setEvents] = useState<Event[]>([])
   const [loading, setLoading] = useState(true)

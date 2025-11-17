@@ -34,7 +34,7 @@ function App() {
         path="/dashboard"
         element={
           user ? (
-            <MemberDashboard user={user} />
+            <MemberDashboard />
           ) : (
             <Navigate to="/login" replace />
           )
@@ -44,7 +44,7 @@ function App() {
         path="/exec"
         element={
           user ? (
-            <ExecDashboard user={user} />
+            <ExecDashboard />
           ) : (
             <Navigate to="/login" replace />
           )
