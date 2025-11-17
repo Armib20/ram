@@ -2,10 +2,20 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getCurrentUser, logout } from '../lib/auth'
 import { supabase } from '../lib/supabase'
-import { Member } from '../types'
+import { Member, Event } from '../types'
+
+interface EventAttendanceWithEvent {
+  id: string
+  eventId: string
+  memberId: string
+  points: number
+  createdAt: string
+  event: Event
+}
 
 export default function MemberDashboard() {
   const [member, setMember] = useState<Member | null>(null)
+  const [events, setEvents] = useState<EventAttendanceWithEvent[]>([])
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
 
@@ -27,14 +37,29 @@ export default function MemberDashboard() {
 
   const loadMemberData = async (computingId: string) => {
     try {
-      const { data, error } = await supabase
+      const { data: memberData, error: memberError } = await supabase
         .from('members')
         .select('*')
         .eq('computingId', computingId.toLowerCase())
         .single()
 
-      if (error) throw error
-      setMember(data)
+      if (memberError) throw memberError
+      setMember(memberData)
+
+      // Load events the member is marked for
+      if (memberData) {
+        const { data: attendanceData, error: attendanceError } = await supabase
+          .from('event_attendance')
+          .select(`
+            *,
+            event:events(*)
+          `)
+          .eq('memberId', memberData.id)
+          .order('createdAt', { ascending: false })
+
+        if (attendanceError) throw attendanceError
+        setEvents((attendanceData || []) as EventAttendanceWithEvent[])
+      }
     } catch (err) {
       console.error('Error loading member data:', err)
     } finally {
@@ -82,33 +107,61 @@ export default function MemberDashboard() {
           <p className="text-gray-600">@{member.computingId}</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-[#0E396D] rounded-xl p-8 text-white shadow-lg hover:shadow-xl transition-shadow border-2 border-[#F0D64E]">
+        <div className="mb-8">
+          <div className="bg-[#0E396D] rounded-xl p-8 text-white shadow-lg hover:shadow-xl transition-shadow border-2 border-[#F0D64E] max-w-md">
             <div className="text-sm font-medium uppercase tracking-wider mb-2 opacity-90">
               Total Points
             </div>
             <div className="text-5xl font-bold">{member.totalPoints}</div>
           </div>
-
-          <div className="bg-white rounded-xl p-8 shadow-md hover:shadow-lg transition-shadow border border-gray-100">
-            <div className="text-sm font-medium text-gray-600 uppercase tracking-wider mb-2">
-              Spring 2025
-            </div>
-            <div className="text-5xl font-bold text-gray-900">{member.spring2025Total}</div>
-          </div>
-
-          <div className="bg-white rounded-xl p-8 shadow-md hover:shadow-lg transition-shadow border border-gray-100">
-            <div className="text-sm font-medium text-gray-600 uppercase tracking-wider mb-2">
-              Fall 2025
-            </div>
-            <div className="text-5xl font-bold text-gray-900">{member.fall2025Total}</div>
-          </div>
         </div>
 
-        <div className="bg-white rounded-xl p-6 shadow-md border border-gray-100">
-          <p className="text-gray-600 text-center text-sm">
-            Points are updated by exec members after events and activities.
-          </p>
+        <div className="bg-white rounded-xl shadow-md border border-gray-100 overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h3 className="text-xl font-bold text-[#0E396D]">Your Events</h3>
+          </div>
+          {events.length === 0 ? (
+            <div className="px-6 py-8 text-center text-gray-500">
+              <p>You haven't been marked for any events yet.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Event Name
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Date
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Points
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {events.map((attendance) => (
+                    <tr key={attendance.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                        {attendance.event.name}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        {new Date(attendance.event.date).toLocaleDateString('en-US', {
+                          year: 'numeric',
+                          month: 'long',
+                          day: 'numeric',
+                        })}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-semibold text-[#0E396D]">
+                        {attendance.points}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </main>
     </div>
